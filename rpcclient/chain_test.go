@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -168,10 +169,19 @@ func TestClientConnectedToWSServerRunner(t *testing.T) {
 				// message is sent every time it is read from, this will ensure that
 				// when client.GetChainTxStatsAsync() gets called, it hits the non-blocking
 				// read from the shutdown channel
+
+				shutdownExit := make(chan bool)
+				wg := sync.WaitGroup{}
+				wg.Add(1)
 				go func() {
 					type shutdownMessage struct{}
 					for {
-						client.shutdown <- shutdownMessage{}
+						select {
+						case client.shutdown <- shutdownMessage{}:
+						case <-shutdownExit:
+							wg.Done()
+							return
+						}
 					}
 				}()
 
@@ -188,6 +198,9 @@ func TestClientConnectedToWSServerRunner(t *testing.T) {
 				if response.err == nil || response.err.Error() != "the client has been shutdown" {
 					t.Fatalf("unexpected error: %s", response.err.Error())
 				}
+
+				shutdownExit <- true
+				wg.Wait()
 			},
 		},
 	}

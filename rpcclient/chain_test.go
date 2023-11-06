@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -188,6 +189,66 @@ func TestClientConnectedToWSServerRunner(t *testing.T) {
 				if response.err == nil || response.err.Error() != "the client has been shutdown" {
 					t.Fatalf("unexpected error: %s", response.err.Error())
 				}
+			},
+		},
+		TestTableItem{
+			Name: "TestGetBestBlockHashAsync",
+			TestCase: func(t *testing.T) {
+				client, serverReceivedChannel, cleanup := makeClient(t)
+				defer cleanup()
+				client.GetBestBlockHashAsync()
+
+				message := <-serverReceivedChannel
+				if message != "{\"jsonrpc\":\"1.0\",\"method\":\"getbestblockhash\",\"params\":[],\"id\":1}" {
+					t.Fatalf("received unexpected message: %s", message)
+				}
+			},
+		},
+		TestTableItem{
+			Name: "TestGetBestBlockHash",
+			TestCase: func(t *testing.T) {
+				client, serverReceivedChannel, cleanup := makeClient(t)
+				defer cleanup()
+
+				wg := sync.WaitGroup{}
+
+				wg.Add(1)
+				go func() {
+					client.GetBestBlockHash()
+					wg.Done()
+				}()
+
+				/*
+					wait for requset to be added to the client's
+					list, this test is wrapped in a timeout
+				*/
+				requestAdded := make(chan bool)
+				go func() {
+					for {
+						client.requestLock.Lock()
+						l := client.requestList.Len()
+						client.requestLock.Unlock()
+						if l > 0 {
+							break
+						}
+					}
+					requestAdded <- true
+				}()
+				<-requestAdded
+
+				message := <-serverReceivedChannel
+				if message != "{\"jsonrpc\":\"1.0\",\"method\":\"getbestblockhash\",\"params\":[],\"id\":1}" {
+					t.Fatalf("received unexpected message: %s", message)
+				}
+
+				/*
+					ensure go routine responsible for sending the command exits,
+					again: this test is wrapped in a timeout
+				*/
+				latestRequest := client.requestList.Back()
+				jReq := latestRequest.Value.(*jsonRequest)
+				jReq.responseChan <- &Response{}
+				wg.Wait()
 			},
 		},
 	}
